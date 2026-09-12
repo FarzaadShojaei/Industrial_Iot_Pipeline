@@ -1,0 +1,76 @@
+# Full microservices deployment:
+#   plc-sim -> connector -> RabbitMQ -> control  (commands back via RabbitMQ)
+#                              |
+#                              +-> storage -> InfluxDB (time-series)
+#                                          -> PostgreSQL (relational/config)
+#   Grafana reads InfluxDB for a real HMI-style dashboard.
+#
+# Run:  docker compose up --build
+
+services:
+  plc-sim:
+    build: .
+    command: python -m plc_sim.tank_process
+    ports: ["5020:5020"]
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      retries: 10
+
+  connector:
+    build: .
+    command: python -m connector.run_connector
+    environment:
+      MODBUS_HOST: plc-sim
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      plc-sim: { condition: service_started }
+
+  control:
+    build: .
+    command: python -m control.run_control
+    environment:
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+      ALGORITHM: pid
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+
+  influxdb:
+    image: influxdb:2.7
+    ports: ["8086:8086"]
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminadmin
+      DOCKER_INFLUXDB_INIT_ORG: plant
+      DOCKER_INFLUXDB_INIT_BUCKET: tank
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dev-token
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: plant_config
+
+  storage:
+    build: .
+    command: python -m storage.run_storage
+    environment:
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: dev-token
+      INFLUX_ORG: plant
+      INFLUX_BUCKET: tank
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      influxdb: { condition: service_started }
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports: ["3000:3000"]
+    depends_on: [influxdb]

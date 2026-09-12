@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+readings.db
+.pytest_cache/
+.venv/

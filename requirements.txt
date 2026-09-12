@@ -1,0 +1,9 @@
+# Core (demo runs with just this)
+pymodbus==3.6.9
+
+# Testing
+pytest>=8.0
+
+# Deployment extras (docker-compose profile)
+# pika>=1.3              # RabbitMQ bus
+# influxdb-client>=1.40  # time-series storage
