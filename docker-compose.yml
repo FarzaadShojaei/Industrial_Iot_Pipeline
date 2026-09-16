@@ -5,13 +5,40 @@
 #                                          -> PostgreSQL (relational/config)
 #   Grafana reads InfluxDB for a real HMI-style dashboard.
 #
-# Run:  docker compose up --build
+# Two control paths, selected by profile:
+#   default profile   -> Python `control` service runs PID/hysteresis (see control/algorithms.py)
+#   `openplc` profile -> a real OpenPLC Runtime executes plc_sim/openplc_program/tank_control.st
+#                         instead. Run: docker compose --profile openplc up --build
+#                         Then open http://localhost:8080 (user/pass: openplc/openplc):
+#                           1. Programs -> upload plc_sim/openplc_program/tank_control.st -> compile
+#                           2. Hardware -> "Generic Modbus TCP Device", none (we use software I/O)
+#                           3. Slave Devices -> Add new device -> Generic Modbus TCP,
+#                              IP = plc-sim, Port = 5020  (this makes OpenPLC a Modbus MASTER
+#                              reading/writing plc-sim's registers, exactly like a real PLC
+#                              talking to a remote I/O module)
+#                           4. Start PLC. OpenPLC now runs tank_control.st against the live plant.
+#                         With this profile active, point the connector at OpenPLC's own Modbus
+#                         server instead of plc-sim directly: MODBUS_HOST=openplc, MODBUS_PORT=502
+#                         (OpenPLC re-exposes its internal I/O as a Modbus slave for supervisory
+#                         systems — this is what our connector/HMI/SCADA layer should read).
+#
+# Run (Python control):  docker compose --profile python-control up --build
+# Run (real PLC):         docker compose --profile openplc up --build
 
 services:
   plc-sim:
     build: .
     command: python -m plc_sim.tank_process
     ports: ["5020:5020"]
+
+  openplc:
+    build: https://github.com/thiagoralves/OpenPLC_v3.git
+    ports:
+      - "8080:8080"   # web dashboard (upload tank_control.st, configure slave device, start PLC)
+      - "502:502"     # OpenPLC's own Modbus TCP server — supervisory systems read the PLC here
+    depends_on:
+      plc-sim: { condition: service_started }
+    profiles: ["openplc"]
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -39,6 +66,7 @@ services:
       ALGORITHM: pid
     depends_on:
       rabbitmq: { condition: service_healthy }
+    profiles: ["python-control"]   # mutually exclusive with the `openplc` profile
 
   influxdb:
     image: influxdb:2.7

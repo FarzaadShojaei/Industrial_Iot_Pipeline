@@ -47,12 +47,44 @@ level  50.8% |#########################           | pump  80.8%  T 26.3°C
 ## Full microservices deployment
 
 ```bash
-docker compose up --build
+docker compose --profile python-control up --build
 ```
 
 Runs each service in its own container: PLC sim, connector, control,
 storage (InfluxDB time-series + PostgreSQL relational), RabbitMQ broker,
 and Grafana (http://localhost:3000) as the HMI dashboard.
+
+## Real PLC path: OpenPLC Runtime
+
+The `control` service above is a Python stand-in. `plc_sim/openplc_program/tank_control.st`
+is the same control loop written as real **IEC 61131-3 Structured Text**,
+meant to run on an actual [OpenPLC Runtime](https://openplc.org) instead —
+this is the difference between "simulating a PLC in Python" and "writing
+PLC software," which is literally the job description this project targets.
+
+```bash
+docker compose --profile openplc up --build
+```
+
+Then, one-time setup through the OpenPLC web UI at http://localhost:8080
+(user/pass `openplc`/`openplc` — this part is GUI-driven, not scriptable):
+
+1. **Programs** → upload `plc_sim/openplc_program/tank_control.st` → compile.
+2. **Slave Devices** → *Add new device* → Generic Modbus TCP, IP `plc-sim`,
+   port `5020`. This makes OpenPLC a **Modbus master** polling the plant
+   simulator, exactly like a real PLC talking to a remote I/O module.
+3. **Start PLC.**
+
+OpenPLC now runs the ST program against the live simulated tank, including
+a hard-coded **emergency-stop interlock at 95% level** — a safety behavior
+that only exists in this version, not in the Python control service, because
+it belongs in deterministic PLC scan-cycle logic rather than an application
+service that can lag or crash.
+
+OpenPLC re-exposes its own I/O as a Modbus TCP server on port `502` for
+supervisory/SCADA systems to read — point the Python `connector` at
+`MODBUS_HOST=openplc`, `MODBUS_PORT=502` to feed this pipeline's storage
+and dashboard from the real-PLC path instead of the Python one.
 
 ## Design decisions (SOLID)
 
@@ -82,7 +114,9 @@ throughout.
 ## Roadmap
 
 - [ ] OPC-UA connector variant (`asyncua`) alongside Modbus
-- [ ] Replace simulator with OpenPLC running IEC 61131-3 structured text
+- [x] Real PLC path: OpenPLC Runtime executing `tank_control.st` (see above)
 - [ ] Kafka bus implementation next to RabbitMQ
 - [ ] Web HMI (FastAPI + WebSocket) replacing the console view
 - [ ] OTA-style config: control setpoints editable from PostgreSQL
+- [ ] Architecture decision records (`docs/decisions/`) documenting why
+      Modbus, why PI over fuzzy/MPC, why a message bus
